@@ -1,0 +1,484 @@
+mse version: 2.1.2
+short name: Cockatrice
+full name: Cockatrice Database v4
+position hint: 007
+icon: icon.png
+version: 2022-10-07
+installer group: magic/Export/cockatrice
+
+depends on:
+	package: magic.mse-game
+	version: 2009-07-23
+
+game: magic
+create directory: true
+file type: *.xml|*.xml|*.*|*.*
+
+# By NormalDream (Djack Donovan)
+# With help from GenevensiS
+# Based on the CS/ECH 1.04 Cockatrice exporter by Zeu
+# Itself based on code by K'yoril, Pichoro, Idle Muse, Innuendo, Seeonee, Advent, Reuben Covington and Cajun
+
+option field:
+	type:choice
+	name: Usage Guide
+	choice: https://tinyurl.com/csexporterV4
+option field:
+	type: text
+	name: cockatrice Set Type
+	description: The "set type" your set will appear as in Cockatrice. "Custom" should be the default.
+	default: Custom
+option field:
+	type: boolean
+	name: export Images
+	description: Whether or not to export images along with the XML. These images are recommended for Cockatrice use.
+	initial: yes
+option field:
+	type: choice
+	name: images File Type
+	description: Which file extension you want the images exported as. JPG is lower quality but lower file size.
+	choice: JPG
+	choice: PNG
+option field:
+	type: choice
+	name: write Tokens
+	description: In which file should the tokens be written
+	choice: in the same file
+	choice: in a separate xml
+	choice: no
+option field:
+	type: text
+	name: images URL
+	description: URL of the Card Images, if the set is uploaded online
+option field:
+	type: boolean
+	name: append Set Code To Tokens
+	description: Adds the set code to token names to differentiate them
+	initial: no
+option field:
+	type: text
+	name: append String To Names
+	description: Appended to the front of all card names and image names.
+
+script:
+	set_has_masterpieces := ((for each card in cards do (if card.rarity == "masterpiece" then 1 else 0)) > 0)
+	date_now := to_string(to_date("now"))
+	
+	card_is_token := {contains(card.shape, match:"token") or contains(card.shape, match:"emblem") or contains(card.shape, match:"rulestip")}
+	is_legend := { contains(if input == "front" then card.super_type else card.super_type_2, match:"Legend") }
+	is_meld_melder_side := { match((if card.special_text != "" then card.special_text else card.rule_text), match:"meld them into ") }
+	
+	unique_token_identifier := {
+		for LOCAL_idx from 0 to card_index - 1 do (if cards[LOCAL_idx].shape == card.shape and cards[LOCAL_idx].name == card.name then " " else "")
+	}
+	
+	card_name := {
+		LOCAL_exporter_name := replace(match:"!exporte?r?name ", replace:"", filter_text(match:"(?:^|(?=\\n))!exporte?r?name [^\n\<]+", card.notes))
+		
+		options.append_String_To_Names
+		+(if card_is_token() and options.append_Set_Code_To_Tokens then set.set_code + " " else "")
+		+ (if LOCAL_exporter_name != "" then (
+			if layout_sides() == "two" and contains(LOCAL_exporter_name, match:"//")
+			then trim(split_text(LOCAL_exporter_name, match:"//")[if side == "front" then 0 else 1])
+			else LOCAL_exporter_name
+		)
+		else if side == "dual" then card.name+" // "+card.name_2
+		else if side == "front" then card.name
+		else card.name_2)
+		# add "Token" at the end of token names
+		+ (if card_is_token() and LOCAL_exporter_name == "" and trim(remove_tags(card.name)) == trim(remove_tags(card.sub_type)) then " Token" else "")
+		# add spaces at the end of token cards with the same card names to differentiate them (e.g. if there are multiple tokens named "Goblin" in the set)
+		# we can unfortunately not take into account the tokens that already exist in official MtG
+		+ (if card_is_token() then unique_token_identifier() else "")
+	}
+	
+	cleanup_filename :=
+		replace@(match:"<(/|\\\\)?i>", replace:"") # remove italics tags
+		+replace@(match:" // ", replace:"") # this is behaviour defined in Cockatrice
+		+replace@(match:"/", replace:" ") # this is behaviour defined in Cockatrice
+		+replace@(match:"[/\\\\>:\"|?*<]", replace:"") # remove invalid windows filename characters
+	
+	card_filename := {
+		#the old exporter used the ".full.jpg" format, which caused some issues with some card images not being loaded properly by Cockatrice (e.g. cards with "." in their name)
+		cleanup_filename(card_name())+"."+to_lower(options.images_File_Type)
+	}
+	
+	fix_color_order := {
+		# 2 color
+		if input == "WG" then "GW"
+		# 3 color shards
+		else if input == "WRG" then "RGW"
+		else if input == "WUG" then "GWU"
+		# 3 color wedges
+		else if input == "WUR" then "URW"
+		else if input == "UBG" then "BGU"
+		else if input == "WBR" then "RWB"
+		else if input == "URG" then "GUR"
+		# 4 colors
+		else if input == "WBRG" then "BRGW"
+		else if input == "WURG" then "RGWU"
+		else if input == "WUBG" then "GWUB"
+		else input
+	}
+	
+	card_color := {
+		LOCAL_text_lower := text_witch_tilded_cardname()
+		if match(LOCAL_text_lower, match:"(?:^|, )(?:<[\\w-]+>)*[Dd]evoid") then "" else
+		if contains(LOCAL_text_lower, match:"~ is all colors.") then "WUBRG" else (
+			LOCAL_casting_cost := if side == "dual" then (card.casting_cost+card.casting_cost_2) else if side == "front" then card.casting_cost else card.casting_cost_2
+			
+			LOCAL_card_color :=
+				if layout_sides() == "two" and layout != "flip" then (
+					if side == "front" then (if chosen(styling_field("other_options"), choice:"front color indicator") then card.card_color else "")
+					else (if chosen(styling_field("other_options"), choice:"back color indicator") then card.card_color_2 else ""))
+				else if (card_is_token() or styling_field("color_indicator_dot", default: false)) then card.card_color else ""
+			
+			fix_color_order(
+			  (if contains(LOCAL_casting_cost, match:"W") or contains(LOCAL_card_color, match:"white") then "W" else "")
+			+ (if contains(LOCAL_casting_cost, match:"U") or contains(LOCAL_card_color, match:"blue")  then "U" else "")
+			+ (if contains(LOCAL_casting_cost, match:"B") or contains(LOCAL_card_color, match:"black") then "B" else "")
+			+ (if contains(LOCAL_casting_cost, match:"R") or contains(LOCAL_card_color, match:"red")   then "R" else "")
+			+ (if contains(LOCAL_casting_cost, match:"G") or contains(LOCAL_card_color, match:"green") then "G" else ""))
+		)
+	}
+	
+	card_color_identity := {
+		# transform cards and dual cards should look at both sides for color identity
+		LOCAL_card_full_text := if layout_sides() == "one" then text_witch_tilded_cardname() else text_witch_tilded_cardname(text_side:"dual")
+		
+		if match(LOCAL_card_full_text, match:"~ is all colors\\.(?! This ability doesn’t affect its color identity\\.)") then "WUBRG" else (
+			# symbols in reminder texts should be ignored (e.g. Extort)
+			LOCAL_card_full_text := replace(LOCAL_card_full_text, match: "<atom-reminder(?:-\\w+)*>.*?<\\/atom-reminder(?:-\\w+)*>", replace: "")
+			
+			# get symbols in text and casting cost
+			LOCAL_symbols := card.casting_cost 
+				+(if layout_sides() != "one" then card.casting_cost_2 else "")
+				+filter_text(match: ">.+<", filter_text(match: "<sym(-auto)?>.+?</sym(-auto)?>", LOCAL_card_full_text))
+
+			LOCAL_card_color :=
+				if layout_sides() == "two" and layout != "flip" then (
+					if chosen(styling_field("other_options"), choice:"front color indicator") then card.card_color else ""
+					+ if chosen(styling_field("other_options"), choice:"back color indicator") then card.card_color_2 else "")
+				else if styling_field("color_indicator_dot", default: false) then card.card_color else ""
+			
+			fix_color_order(
+			  (if contains(LOCAL_symbols, match:"W") or contains(LOCAL_card_color, match:"white") or (contains(card.type, match:"Land") and contains(card.type, match:"Plains"))   then "W" else "")
+			+ (if contains(LOCAL_symbols, match:"U") or contains(LOCAL_card_color, match:"blue")  or (contains(card.type, match:"Land") and contains(card.type, match:"Island"))   then "U" else "")
+			+ (if contains(LOCAL_symbols, match:"B") or contains(LOCAL_card_color, match:"black") or (contains(card.type, match:"Land") and contains(card.type, match:"Swamp"))    then "B" else "")
+			+ (if contains(LOCAL_symbols, match:"R") or contains(LOCAL_card_color, match:"red")   or (contains(card.type, match:"Land") and contains(card.type, match:"Mountain")) then "R" else "")
+			+ (if contains(LOCAL_symbols, match:"G") or contains(LOCAL_card_color, match:"green") or (contains(card.type, match:"Land") and contains(card.type, match:"Forest"))   then "G" else ""))
+		)
+	}
+	
+	text_witch_tilded_cardname := {
+		text_side := if text_side == "" then side else text_side
+		if text_side == "front" then text_witch_tilded_cardname_inner("front")
+		else if text_side == "back" then text_witch_tilded_cardname_inner("back")
+		else text_witch_tilded_cardname_inner("front") + "\n\n---\n\n" + text_witch_tilded_cardname_inner("back")
+	}@(text_side:"")
+	
+	text_witch_tilded_cardname_inner := {
+		LOCAL_side_text := if input == "front" then (if card.special_text != "" then card.special_text else card.rule_text)
+				else (if card.special_text_2 != "" then card.special_text_2 else card.rule_text_2)
+		LOCAL_side_name := if input == "front" then card.name else card.name_2
+		#replace all instances of:
+		replace(LOCAL_side_text,
+			#CARDNAME/LEGNAME tag
+			match:"<atom-(?:card|leg)name>.*?<\\/atom-(?:card|leg)name>"
+			#the name of the card
+				+"|"+LOCAL_side_name
+			#the name of the legend (if it is legendary)
+				+(if is_legend() then "|" + filter_text(LOCAL_side_name, match:"^[^,]+") else "")
+			#"this spell"
+				+"|[Tt]his spell",
+			replace:"~")
+	}
+	
+	card_text := {
+		if side == "dual" then ((if card.special_text != "" then card.special_text else card.rule_text)+"\n\n---\n\n"+(if card.special_text_2 != "" then card.special_text_2 else card.rule_text_2))
+		else if side == "front" then (if card.special_text != "" then card.special_text else card.rule_text)
+		else (if card.special_text_2 != "" then card.special_text_2 else card.rule_text_2)
+	}
+	
+	card_rarity := {
+		if (contains(card.rarity, match:"mythic") or contains(card.rarity, match:"masterpiece")) then "mythic" else card.rarity
+	}
+	
+	cleanup_card_type := {
+		replace(match:"[ —]+$", replace:"", input)
+	}
+	
+	card_type := {
+		if side == "dual" then (if card.type == card.type_2 then cleanup_card_type(card.type) else cleanup_card_type(card.type)+" // "+cleanup_card_type(card.type_2))
+		else cleanup_card_type (if side == "front" then card.type else card.type_2)
+	}
+	
+	card_main_type := {
+		filter_text(match: "\\w+$", remove_tags(if side == "back" then card.super_type_2 else card.super_type))
+	}
+	
+	table_row := {
+		if contains(card_type(), match:"Instant") or contains(card.type, match:"Sorcery") then 3
+		else if contains(card_type(), match:"Creature") then 2
+		else if contains(card_type(), match:"Land") then 0
+		else 1
+	}
+		
+	card_power_toughness := {
+		LOCAL_power := if side == "back" then card.power_2 else card.power
+		LOCAL_toughness := if side == "back" then card.toughness_2 else card.toughness
+		LOCAL_power + if LOCAL_toughness == "" then "" else "/" + LOCAL_toughness
+	}
+	
+	card_loyalty := {
+		if side == "back" then card.loyalty_2 else card.loyalty
+	}
+	
+	# symbols currently not handled by mse: acorn: {A}, tickets: {TIX}
+	# supported only in mana cost, not in text: half mana, infinite mana (already handled by this script)
+	# search Cockatrice's cards.xml for this regex if you want to check if there are any new symbols: {(?!(?:[∞TQEXYZSCP½A]|H[WUBRG]|\d+|TIX|CHAOS|[WUBRG2](?:/[WUBRGP])*)})
+	convert_mana_symbol :=
+		# half generic mana
+		replace@(match:"1/2", replace:"½")
+		# infinite mana
+		+replace@(match:"I", replace:"∞")
+		# hybrid: from ./. to {./.}, also adds brackets everywhere else if force_brackets is true
+		+replace@(match:".(?:/[^/ ])+", replace:"\{\\0}")
+		# phyrexian mana: from {H/.} to {./P}
+		+replace@(match:"\{H/(.+?)\}", replace:"\{\\1/P}")
+		+replace@(match:"H", replace:"P")
+		# half man: from |. to H.
+		+replace@(match:"\\|(.)", replace:"\{H\\1}")
+		# if the mana cost is only a half mana, remove the brackets
+		+replace@(match:"^\{(H.)\}$", replace:"\\1")
+		# chaos
+		+replace@(match:"\{?A\}?", replace:"\{CHAOS}")
+	
+	convert_mana_symbol_forced_brackets :=
+		remove_tags
+		+convert_mana_symbol
+		# add brackets to each symbol that didn't have any
+		# unescaped regex: (?<!{)(?:\d+|H?[^{}\n])(?![^\n{]*})
+		+replace@(match:"(?<!\{)(?:\\d+|H?[^\{}\\n])(?![^\\n\{]*})", replace:"\{\\0}")
+	
+	card_mana_cost := {
+		convert_mana_symbol(if side == "dual" then (card.casting_cost+" // "+card.casting_cost_2) else if side == "front" then card.casting_cost else card.casting_cost_2)
+	}
+	
+	convert_mana_symbols_in_text := {
+		replace(input, match:"<sym(?:-auto)?>([^\\n]*?)</sym(?:-auto)?>", replace: convert_mana_symbol_forced_brackets)
+	}
+	
+	get_other_meld_front_cost := {
+		LOCAL_other_meld := (filter_list(cards, filter: { input.stylesheet == card.stylesheet and input.name_2 == card.name_2 and input.name != card.name })[0] or else nil)
+		if LOCAL_other_meld == nil then "" else LOCAL_other_meld.casting_cost
+	}
+	
+	compute_cmc := {
+		LOCAL_casting_cost :=
+			if side == "dual" then (card.casting_cost+card.casting_cost_2)
+			else if side == "front" or layout == "flip" or layout == "transform" then card.casting_cost
+			else if side == "back" and layout == "meld" then card.casting_cost + get_other_meld_front_cost()
+			else card.casting_cost_2
+
+		#convert half generic mana symbols into the same has the other half mana symbols
+		LOCAL_casting_cost := replace(LOCAL_casting_cost, match:"1/2", replace:"|1")
+		
+		to_real ( #to avoir empty strings
+		for each symbol in break_text(LOCAL_casting_cost, match:"(?:\\d(?!/))+|.") do {
+			if match(input, match:"[XYZ]") then 0.0
+			else if input == "|" then -0.5
+			else if input == "/" then -1.0
+			else to_real(input) or else 1.0
+		}(symbol))
+	}
+	
+	enters_tapped := {
+		match(card.notes, match:"(?:^|\\n)!tapped(?:\\W|$)") #was used by the older exporter
+		or match(remove_tags(text_witch_tilded_cardname()), match:"(?<![Ww]hen)(?<![Ww]hen )(?:~| it) enters the battlefield tapped(?! unless)")
+	}
+	
+	write_reverse_related_from_notes :=
+		filter_text@(match:"(?:^|\\n)!related ?[^!\\n]+!?") #get the !related block
+		+replace@(match: "^\\n?!related ?(\n)?", replace:"") #remove the irrelevant start of the block
+		+replace@(match:"!$",replace: "") #remove the irrelevant end of the block
+		+replace@(match:" *(.+?)[ ;]*(?:;|$)", replace:{"\n\t\<reverse-related>" + options.append_String_To_Names + _1 + "\</reverse-related>"}) #add reverse-related tags
+		+replace@(match:"\<X((?:=\\d+)?>\</reverse-related>)", replace:"\<x\\1") #fix lowercase Xs in amount values
+		+replace@(match:"\<reverse-related>([^\n]+)\<[Aa]ttache?d?>(\<[^\\n]+>)*\</reverse-related>", replace:"\<reverse-related attach=\"attach\">\\1\\2\</reverse-related>") #add attach attribute
+		+replace@(match:"\<reverse-related([ \\w=\"]*)>([^\n]+)\<[Ee]xclude>(\<[^\\n]+>)*\</reverse-related>", replace:"\<reverse-related\\1 exclude=\"exclude\">\\2\\3\</reverse-related>") #add exclude attribute
+		+replace@(match:"\<reverse-related([ \\w=\"]*)>([^\n]+)\<(x?=?\\d+)>\</reverse-related>", replace:"\<reverse-related\\1 count=\"\\3\">\\2\</reverse-related>") #add amount values
+		#add the exclude attribute automatically if a card is listed multiple times on the same token
+		+replace@(match:"(?<=\<reverse-related)(?:[ \\w\\d=\"]*)>([^\\n]+)\</reverse-related>(?:\\n\\t\<reverse-related(?:[ \\w\\d=\"]*)>\\1\</reverse-related>)+", replace:
+			replace@(match:"\<reverse-related((?:[ \\w\\d=\"](?!exclude=\"exclude\"))*)>", replace:"\<reverse-related exclude=\"exclude\"\\1>"))
+	
+	# returns "one", "two" or "dual"
+	layout_sides := {
+		if layout == "split" or layout == "adventure" or layout == "aftermath" then "dual"
+		else if layout == "transform" or layout == "meld" or layout == "modal_dfc" or layout == "flip" then "two"
+		else "one"
+	}
+	
+	styling_field := {
+		get_card_styling(card)[input] or else default
+	}@(default:"")
+		
+		
+	write_card := {
+		"\<card>"
+		# name
+		+"\n\t" + "\<name>"+card_name()+"\</name>"
+		# text
+		+"\n\t" + "\<text>"+convert_mana_symbols_in_text(card_text())+"\</text>"
+		# prop tag block
+		+"\n\t" + "\<prop>"
+		
+		# layout (tokens do not have a layout)
+		+ (if layout == "" then "" else "\n\t\t" + "\<layout>"+layout+"\</layout>")
+		# type
+		+ "\n\t\t" + "\<type>"+card_type()+"\</type>"
+		# maintype
+		+ "\n\t\t" + "\<maintype>"+card_main_type()+"\</maintype>"
+		# mana cost
+		+ (if card_mana_cost() == "" then "" else "\n\t\t" + "\<manacost>"+card_mana_cost()+"\</manacost>")
+		# cmc
+		+ "\n\t\t" + "\<cmc>"+compute_cmc()+"\</cmc>"
+		# color
+		+ (if card_color() == "" then "" else "\n\t\t" + "\<colors>" + card_color() + "\</colors>")
+		# color identity
+		+ (if card_color_identity() == "" then "" else "\n\t\t" + "\<coloridentity>" + card_color_identity() + "\</coloridentity>")
+		# power/toughness
+		+ (if card_power_toughness() != "" then "\n\t\t\<pt>" + card_power_toughness() + "\</pt>" else "")
+		# loyalty
+		+ (if contains(card_type(), match:"Planeswalker") and card_loyalty() != "" then "\n\t\t\<loyalty>" + card_loyalty() + "\</loyalty>" else "")
+		# side
+		+ (if card_is_token() then "" else "\n\t\t" + "\<side>" + (if side == "dual" then "front" else side) + "\</side>")
+		
+		+"\n\t" + "\</prop>"
+		# set
+		+"\n\t" + "\<set"+ (if card_is_token() then "" else " rarity=\""+card_rarity()+"\"")
+							  +(if card.card_number == "" then "" else " num=\""+split_text(match: "/", card.card_number)[0]+"\"")
+		                      +(if options.images_URL == "" then "" else " picurl=\""+options.images_URL+"/"+card_filename()+"\"")
+							  +">"+(if card.rarity == "masterpiece" then set.masterpiece_set_code else set.set_code)+"\</set>"
+		# cipt (etb tapped)
+		+(if enters_tapped() then "\n\t\<cipt>1\</cipt>" else "")
+		# upsidedown (flip cards)
+		+(if layout == "flip" and side == "back" then "\n\t\<upsidedown>1\</upsidedown>" else "")
+		# related
+		+(if layout_sides() == "two" and (layout != "meld" or (side == "front" and is_meld_melder_side())) then
+			"\n\t\<related attach=\"attach\">" + card_name(side:if side == "front" then "back" else "front") + "\</related>" else "")
+		#reverse-related
+		+write_reverse_related_from_notes(card.notes)
+		#token
+		+ (if card_is_token() then "\n\t\<token>1\</token>" else "")		
+		# tablerow
+		+"\n\t" + "\<tablerow>"+table_row()+"\</tablerow>"
+		+"\n"+ "\</card>"
+	}
+	
+	compute_card_layout := {
+		if contains(card.shape, match:"plane card") then "planar"
+		else if contains(card.shape, match:"saga") and chosen(styling_field("other_options"), choice:"class") then "class"
+		else if contains(card.shape, match:"normal") and contains(to_lower(card.stylesheet.short_name or else ""), match:"vanguard") then "vanguard"
+		else if contains(card.shape, match:"double") and (chosen(styling_field("other_options"), choice:"meld back") or chosen(styling_field("other_options"), choice:"meld")) then "meld"
+		else if contains(card.shape, match:"double") and (card.casting_cost_2 != "" or contains(styling_field("dfc_type"), match:"modal"))then "modal_dfc"
+		else if contains(card.shape, match:"double") then "transform"
+		else if contains(card.shape, match:"adventure") then "adventure"
+		else if contains(card.shape, match:"aftermath") then "aftermath"
+		else if contains(card.shape, match:"saga") and not chosen(styling_field("other_options"), choice:"remove bookmark") then "saga"
+		else if contains(card.shape, match:"leveler") then "leveler"
+		else if contains(card.shape, match:"split") then "split"
+		else if contains(card.shape, match:"class") then "class" #cajun template uses "saga"
+		else if contains(card.shape, match:"planar") then "planar" #cajun template uses "plane card"
+		else if contains(card.shape, match:"vanguard") then "vanguard" #cajun template uses "normal"
+		else if contains(card.shape, match:"augment") then "augment" #NOT INCLUDED IN CAJUN TEMPLATES
+		else if contains(card.shape, match:"host") then "host" #NOT INCLUDED IN CAJUN TEMPLATES
+		else if contains(card.shape, match:"flip") then "flip" #NOT INCLUDED IN CAJUN TEMPLATES
+		else if contains(card.shape, match:"scheme") then "scheme" #NOT INCLUDED IN CAJUN TEMPLATES
+		else if card_is_token() then "" #tokens do not have layouts
+		else "normal"
+	}
+	
+	do_card_sides_operation := {	
+		layout := compute_card_layout()
+	
+		# only write one back of each meld card duo
+		if layout_sides() == "one" or (layout == "meld" and is_meld_melder_side()) then operation(side: "front")
+		else if layout_sides() == "dual" then operation(side: "dual")
+		else operation(side: "front") + operation(side: "back")
+	}
+	
+	do_cards_operation := {
+		for each card_index:card in cards do do_card_sides_operation(operation: operation)
+	}
+
+	write_info := {
+		"\<info>"
+		+"\n\t\<author>" + "Magic Set Editor Cockatrice Exporter" + "\</author>"
+		+"\n\t\<createdAt>" + date_now + "\</createdAt>"
+		+"\n\</info>"
+	}
+	
+	write_sets := {
+		"\<sets>"
+		
+		+"\n\<set>"
+		+"\n\t\<name>"+set.set_code+"\</name>"		
+		+"\n\t\<longname>"+set.title+"\</longname>"
+		+"\n\t\<settype>"+options.cockatrice_Set_Type+"\</settype>"
+		+"\n\</set>"
+		
+		+(if set_has_masterpieces then
+			"\n\<set>"
+			+"\n\t\<name>"+set.masterpiece_set_code+"\</name>"
+			+"\n\t\<longname>"+set.title+" Masterpieces\</longname>"
+			+"\n\t\<settype>"+options.cockatrice_Set_Type+"\</settype>"
+			+"\n\</set>"
+		else "")
+		
+		+"\n\</sets>"
+	}
+	
+	write_cards := {
+		"\<cards>"
+		+ do_cards_operation(operation:{if card_is_token() == token_database then "\n" + write_card(card) else ""})
+		#when writing tokens in the same file, still write them at the end of the file, for neatness		
+		+ (if options.write_Tokens == "in the same file" then do_cards_operation(operation:{if card_is_token()then "\n" + write_card(card) else ""}) else "")
+		+ "\n\</cards>"
+	}
+		
+	write_database := {
+		"<?xml version=\"1.0\" encoding=\"UTF-8\"?>"
+		+"\n<cockatrice_carddatabase version=\"4\" xmlns:xsi=\"http://www.w3.org/2001/XMLSchema-instance\" xsi:schemaLocation=\"https://raw.githubusercontent.com/Cockatrice/Cockatrice/master/doc/carddatabase_v4/cards.xsd\">\n"
+		+ to_text(
+			write_info()
+			+(if token_database then "" else "\n"+write_sets())
+			+"\n"+write_cards())
+		+"\n</cockatrice_carddatabase>"
+	}@(token_database: false)
+	
+	write_card_image_file := {
+		LOCAL_card_image := to_image(card)
+
+		if layout_sides() == "two" then (
+			if layout == "flip" then (if side == "back"
+				then rotate(LOCAL_card_image, angle: 180))
+			else (if side == "front"
+				then LOCAL_card_image := crop(LOCAL_card_image, height: 523, width: 375, offset_x: 0, offset_y: 0)
+				else LOCAL_card_image := crop(LOCAL_card_image, height: 523, width: 375, offset_x: 377, offset_y: 0))
+		)
+		
+		if layout == "split" or layout == "planar"
+			then LOCAL_card_image := rotate(LOCAL_card_image, angle: 90)
+		
+		write_image_file(LOCAL_card_image, directory: set.set_code, file:card_filename(), width: 375, height: 523)
+	}
+	
+	#write token file
+	if options.write_Tokens == "in a separate xml" then write_text_file(file:set.set_code + "-tokens.xml", write_database(token_database: true)) else ""
+	
+	#write images
+	if options.export_Images then do_cards_operation(operation:{ if card_is_token() and options.write_Tokens == "no" then "" else write_card_image_file(card)}) else ""
+	
+	#write main file
+	write_database()
+	
