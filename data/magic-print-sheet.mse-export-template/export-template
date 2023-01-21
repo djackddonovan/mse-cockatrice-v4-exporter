@@ -1,0 +1,792 @@
+﻿mse version: 2.1.2
+short name: Print Sheet
+full name: Print Sheet
+position hint: 006
+icon: icon.png
+version: 2023-01-20
+installer group: magic/Export/print
+
+depends on:
+	package: magic.mse-game
+	version: 2009-07-23
+
+game: magic
+create directory: true
+file type: *.txt|*.txt|*.*|*.*
+
+# By NormalDream (Djack Donovan)
+
+option field:
+	type:choice
+	name: Usage Guide
+	choice: https://tinyurl.com/csexporterV4
+option field:
+	type: choice
+	name: format
+	description: On what paper format do you want to print your cards
+	choice: A4
+	choice: A3
+	choice: A2
+	choice: A1
+	choice: A0
+	choice: Individual Cards
+	choice: Card List Only
+option field:
+	type: choice
+	name: bleed mode
+	description: Should we add bleed on each card sides?
+	choice: add bleed
+	choice: sharpened with no bleed
+	choice: raw
+	initial: sharpened with no bleed
+option field:
+	type: choice
+	name: zoom level
+	description: The zoom level of the cards
+	choice: 1x
+	choice: 2x
+	choice: 3x
+	choice: 4x
+option field:
+	type: boolean
+	name: add full page margin
+	description: Add a margin to make an image that fills the whole page
+	initial: yes
+option field:
+	type: boolean
+	name: add cut lines
+	description: Add grey line between cards to make it easier to cut them by hand
+	initial: no
+option field:
+	type: text
+	name: print count
+	description: How many of each card should be printed by default (see the !printcount command documentation)
+	default: 1
+	script:
+		str := filter_text(value, match: "\\d")
+		if str == "" then 1 else to_int(str) or else 2147483647
+option field:
+	type: text
+	name: print group
+	description: Which print group should be taken into account (see the !printcount command documentation)
+	default: "(default)"
+	script:
+		if match(value, match: "^\\s*$") then "(default)" else value
+option field:
+	type: boolean
+	name: dfc front and back in separate folders
+	description: Write the front and back of dfc cards in separate folders
+	initial: no
+option field:
+	type: multiple choice
+	name: write
+	description: Which card rarities do you want to print
+	choice: commons
+	choice: uncommons
+	choice: rares
+	choice: mythic rares
+	choice: masterpieces
+	choice: specials
+	choice: basic lands
+	choice: tokens
+	initial: commons, uncommons, rares, mythic rares, masterpieces, specials, basic lands, tokens
+option style:
+	write:
+		render style: checklist
+		direction: vertical
+
+script:
+	#TODO sort cards by set number -> would be cool, but complicated
+
+	export_begin_time := to_date("now")
+
+	# Init size info
+	zoom_lvl := to_int(substring(options.zoom_level, end: 1))
+	px := { zoom_lvl * input }
+
+	card_base_width := px(375)
+	card_base_height := px(523)
+	max_bleed := px(18)
+	rsc_bleed_width := card_base_width + max_bleed * 2
+	rsc_bleed_height := card_base_height + max_bleed * 2
+
+	print_group := if to_lower(options.print_group) == "(default)" or options.print_group == "" then "(default)" else trim(options.print_group)
+	default_print_count := if options.print_count == "" then 1 else to_int(options.print_count)
+
+	get_duration := {
+		hours :=
+			to_int(filter_text(end,   match: "\\d\\d", in_context: "<match>:\\d\\d:\\d\\d")) -
+			to_int(filter_text(start, match: "\\d\\d", in_context: "<match>:\\d\\d:\\d\\d"))
+		minutes :=
+			to_int(filter_text(end,   match: "\\d\\d", in_context: "\\d\\d:<match>:\\d\\d")) -
+			to_int(filter_text(start, match: "\\d\\d", in_context: "\\d\\d:<match>:\\d\\d"))
+		seconds :=
+			to_int(filter_text(end,   match: "\\d\\d", in_context: "\\d\\d:\\d\\d:<match>")) -
+			to_int(filter_text(start, match: "\\d\\d", in_context: "\\d\\d:\\d\\d:<match>"))
+
+		if seconds < 0 then (
+			seconds := seconds + 60
+			minutes := minutes - 1
+		)
+		if minutes < 0 then (
+			minutes := minutes + 60
+			hours := hours - 1
+		)
+		if hours < 0 then (
+			hours := hours + 24
+		)
+
+		to_string(hours, format: "02i") + ":" + to_string(minutes, format: "02i") + ":" + to_string(seconds, format: "02i")
+
+		#hours + ":" + minutes + ":" + seconds
+	}
+
+	format_dimensions := {
+		if input == "A4" then (
+			[210, 297]
+		) else if input == "A3" then (
+			[297, 420]
+		) else if input == "A2" then (
+			[420, 594]
+		) else if input == "A1" then (
+			[594, 841]
+		) else if input == "A0" then (
+			[841, 1189]
+		) else if input == "card" then (
+			[63.5, 88.9]
+		) else (
+			trace(FORMAT ERROR)
+			[100, 100]
+		)
+	}
+
+	# Load images
+	rsc_img := { resize_image(to_image(input), width: card_base_width, height: card_base_height) }
+	rsc_bleed_img := { resize_image(to_image(input), width: rsc_bleed_width, height: rsc_bleed_height) }
+
+	img_blank := to_image("blank.png")
+	img_cut_lines_dot := recolor_image(input: "blank.png", red:rgb(0,0,0), green:rgb(0,0,0), blue:rgb(0,0,0), white: rgb(119,119,119))
+
+	img_border_common_bleed := rsc_bleed_img("border-common-bleed.png")
+	img_border_common := crop(img_border_common_bleed, offset_x: max_bleed, offset_y: max_bleed, width: card_base_width, height:card_base_height)
+	img_border_fullart_bleed_mask := rsc_bleed_img("border-fullart-bleed-mask.png")
+
+	img_border_silver_bleed := rsc_bleed_img("border-silver-bleed.png")
+	img_border_silver := crop(img_border_silver_bleed, offset_x: max_bleed, offset_y: max_bleed, width: card_base_width, height:card_base_height)
+
+	img_full_border_common := rsc_img(recolor_image(input: "blank.png", red:rgb(0,0,0), green:rgb(0,0,0), blue:rgb(0,0,0), white: rgb(255,0,0)))
+	img_full_border_common_bleed := rsc_bleed_img(recolor_image(input: "blank.png", red:rgb(0,0,0), green:rgb(0,0,0), blue:rgb(0,0,0), white: rgb(255,0,0)))
+
+	img_border_mini_plane := rsc_img(recolor_image(input: "blank.png", red:rgb(0,0,0), green:rgb(0,0,0), blue:rgb(0,0,0), white: rgb(23,20,15)))
+	img_border_mini_plane_bleed := rsc_bleed_img(recolor_image(input: "blank.png", red:rgb(0,0,0), green:rgb(0,0,0), blue:rgb(0,0,0), white: rgb(23,20,15)))
+	img_border_mini_plane_mask := rsc_img("border-mini-plane-mask.png")
+
+	img_corner_mask := rsc_img("corner-mask.png")
+	img_corner_mask_alt1 := rsc_img("corner-mask-alt1.png")
+	img_corner_mask_alt2 := rsc_img("corner-mask-alt2.png")
+
+	img_partial_corner_mask := resize_image(to_image("partial-corner-mask.png"), width: px(16), height: px(16))
+	img_partial_meld_center_mask := resize_image(to_image("partial-meld-center-mask.png"), width: px(8), height: px(20))
+
+	img_cut_lines_bleed := rsc_bleed_img("cut_lines-bleed.png")
+
+
+
+	card_is_token := { contains(card.shape, match:"token") or contains(card.shape, match:"emblem") or contains(card.shape, match:"rulestip") }
+	should_print_card := { if card_is_token() then chosen(options.write, choice:"tokens") else chosen(options.write, choice:card.rarity+"s") }
+	is_meld_melder_side := { match((if card.special_text != "" then card.special_text else card.rule_text), match:"meld them into ") }
+	is_silver_border := { card.border_color == rgb(200,200,200) }
+
+	unique_name_identifier := {
+		similar_count := for LOCAL_idx from 0 to card_index - 1 do (if cards[LOCAL_idx].name == card.name then 1 else 0)
+		if similar_count > 0 then " - " + to_string(similar_count) else ""
+	}
+
+	cleanup_filename :=
+		replace@(match:"<(/|\\\\)?i>", replace:"") # remove italics tags
+		+replace@(match:"[/\\\\>:\"|?*<]", replace:"") # remove invalid windows filename characters
+
+	card_filename := {
+		filename :=  card.name
+			+ (if layout_sides() == 2 then " - " + card.name_2 else "")
+			+ unique_name_identifier()
+			+ (if print_count <= 1 then "" else " (" + print_idx + ")")
+			+ (if layout_sides() == 2 then (if side == "front" then " - side A" else " - side B") else "")
+
+		cleanup_filename(filename) + ".png"
+	}
+
+	card_name := {
+		name := replace(match:"!exporte?r?name ", replace:"", filter_text(match:"(?:^|(?=\\n))!exporte?r?name [^\n\<]+", card.notes))
+
+		if name == "" then (
+			name := card.name
+			if layout_sides() == 2 or match(card.shape, match:"adventure|aftermath|split") then
+				name := name + " // " + card.name_2
+		)
+		if card_is_token() then
+			name := name + " (Token)"
+		name
+	}
+
+	layout_sides := {
+		if layout == "dfc" or layout == "meld" then 2
+		else 1
+	}
+
+	styling_field := {
+		get_card_styling(card)[input] or else default
+	}@(default:"")
+
+	card_print_count := {
+		count_str := ""
+		if print_group == "(default)" then
+			count_str := filter_text(card.notes, match: "(?<=^!printcount )\\d+(?=\n|;|$)")
+		if count_str == "" then
+			count_str := filter_text(card.notes, match: "(?<=^!printcount \"" + print_group + "\" )\\d+(?=\n|;|$)")
+
+		if count_str != "" then
+			min(to_int(count_str), 999)
+		else
+			default_print_count
+	}
+
+	compute_card_layout := {
+		stylesheet_name := card.stylesheet.short_name or else stylesheet.short_name
+		stylesheet_full_name := card.stylesheet.full_name or else stylesheet.full_name
+
+		if (contains(stylesheet_name, match: "Planechase") and not contains(stylesheet_full_name, match: "Mini")) then "oversize horizontal"
+		else if contains(card.shape, match:"plane card") or contains(card.shape, match:"planar") or contains(card.shape, match:"split") then "horizontal"
+		else if contains(card.shape, match:"double") and (chosen(styling_field("other_options"), choice:"meld back") or chosen(styling_field("other_options"), choice:"meld")) then "meld"
+		else if contains(card.shape, match:"double") then "dfc"
+		else "normal"
+	}
+
+	is_fullart := {
+		frames := styling_field("frames")
+		other_options := styling_field("other_options")
+		stylesheet_name := to_lower(card.stylesheet.short_name or else stylesheet.short_name)
+
+		chosen(frames, choice:"borderless art")
+		or chosen(frames, choice:"puma")
+		or chosen(other_options, choice:"mythic edition")
+		or contains(stylesheet_name, match: "contraption")
+		or contains(stylesheet_name, match: "full art")
+		or contains(stylesheet_name, match: "jp showcase")
+		or contains(stylesheet_name, match: "unstable basic")
+		or contains(stylesheet_name, match: "gz walker")
+		or contains(stylesheet_name, match: "godzilla")
+		or match(card.notes, match: "^!fullart\\s*;?\\s*$")
+	}
+
+	is_full_fullart := {
+		frames := styling_field("frames")
+		other_options := styling_field("other_options")
+		stylesheet_name := to_lower(card.stylesheet.short_name or else stylesheet.short_name)
+
+		chosen(frames, choice:"borderless art") and chosen(frames, choice:"fullart")
+		or chosen(other_options, choice:"mythic edition")
+		or contains(stylesheet_name, match: "full art")
+		or contains(stylesheet_name, match: "contraption")
+		or contains(stylesheet_name, match: "unstable basic")
+		or match(card.notes, match: "^!fullart\\s*;?\\s*$")
+	}
+
+	is_old :=
+	{
+		stylesheet_name := card.stylesheet.short_name or else stylesheet.short_name
+		match(stylesheet_name, match: "[Oo]ld [Ss]tyle")
+	}
+
+	is_plane := {
+		contains(card.stylesheet.short_name or else stylesheet.short_name, match: "Planechase")
+	}
+
+	fullart_bleed := {
+		# Top
+		img := overlay(image1: input, image2:
+			resize_image(resize_image(
+				flip_vertical(crop(input, offset_x: max_bleed, offset_y: max_bleed, width: card_base_width, height: px(6))),
+				width: card_base_width, height: 6), width: card_base_width, height: max_bleed, mode: "bicubic"),
+			offset_x: max_bleed, offset_y: 0)
+		# Bottom
+		img := overlay(image1: img, image2:
+			resize_image(resize_image(
+				flip_vertical(crop(input, offset_x: max_bleed, offset_y: card_base_height + max_bleed - px(6), width: card_base_width, height: px(6))),
+				width: card_base_width, height: 6), width: card_base_width, height: max_bleed, mode: "bicubic"),
+			offset_x: max_bleed, offset_y: card_base_height + max_bleed)
+
+		img_h := img
+
+		# Left
+		img := overlay(image1: img, image2:
+			resize_image(resize_image(
+				flip_horizontal(crop(img_h, offset_x: max_bleed, offset_y: 0, width: px(6), height: rsc_bleed_height)),
+				width: 6, height: rsc_bleed_height), width: max_bleed, height: rsc_bleed_height, mode: "bicubic"),
+			offset_x: 0, offset_y: 0)
+		# Right
+		img := overlay(image1: img, image2:
+			resize_image(resize_image(
+				flip_horizontal(crop(img_h, offset_x: card_base_width + max_bleed - px(6), offset_y: 0, width: px(6), height: rsc_bleed_height)),
+				width: 6, height: rsc_bleed_height), width: max_bleed, height: rsc_bleed_height, mode: "bicubic"),
+			offset_x: card_base_width + max_bleed, offset_y: 0)
+
+		if not is_full_fullart() then (
+			img := combine_blend(image1: img, image2: img_border_fullart_bleed_mask, combine: "multiply")
+		)
+
+		img
+	}
+
+	handle_bled_meld := {
+		# fill center line
+		line_top := crop(
+			input,
+			width: rsc_bleed_width, height: 1,
+			offset_x: 0, offset_y: px(278))
+		line_bottom := crop(
+			input,
+			width: rsc_bleed_width, height: 1,
+			offset_x: 0, offset_y: px(281))
+
+		combined_line := resize_image(img_blank, width: rsc_bleed_width, height: 2)
+		combined_line := overlay(image1: combined_line, image2: line_top,    offset_x: 0, offset_y: 0)
+		combined_line := overlay(image1: combined_line, image2: line_bottom, offset_x: 0, offset_y: 1)
+		combined_line := crop(
+			resize_image(combined_line, width: rsc_bleed_width, height: px(4), mode: "bilinear"),
+			width: rsc_bleed_width, height: px(2),
+			offset_x: 0, offset_y: px(1))
+
+		img := overlay(
+			image1: input, image2: combined_line,
+			offset_x: 0, offset_y: px(279))
+
+		# split top or bottom of card
+		# (this was manually calculated for a 375x523 px card)
+		img := crop(img, width: px(395), height: px(291), offset_x: px(8), offset_y: if is_meld_melder_side() then px(7) else px(270))
+		resize_image(rotate(img, angle: 270), width: rsc_bleed_width, height: rsc_bleed_height)
+	}
+
+	mask_corners := {
+		if is_plane() then (
+			masked_blend(light: input, dark: img_border_mini_plane, mask: img_border_mini_plane_mask)
+		) else (
+			#dfc card backs have messy corners, so we use a wider mask
+			mask :=
+				if layout == "meld" and side == "back" then img_corner_mask_alt2
+				else if layout_sides() == 2 then img_corner_mask_alt1
+				else img_corner_mask
+			masked_blend(
+				light: input,
+				dark: recolor_image(
+					if is_old() then img_full_border_common else if is_silver_border() then img_border_silver else img_border_common,
+					color: card.border_color),
+				mask: mask)
+		)
+	}
+
+	fill_corners := {
+		c_size := px(16)
+		stretch_size := px(24)
+		right_offset := card_base_width - c_size
+		bottom_offset := card_base_height - c_size
+
+		corner_img_top_left := crop(input, width: c_size, height: c_size, offset_x: 0, offset_y: 0)
+		corner_img_top_right := crop(input, width: c_size, height: c_size, offset_x: right_offset, offset_y: 0)
+		corner_img_bottom_left := crop(input, width: c_size, height: c_size, offset_x: 0, offset_y: bottom_offset)
+		corner_img_bottom_right := crop(input, width: c_size, height: c_size, offset_x: right_offset, offset_y: bottom_offset)
+
+		img := overlay(
+			image1: input,
+			image2: masked_blend(
+				light: corner_img_top_left,
+				dark: crop(
+					resize_image(corner_img_top_left, width: stretch_size, height: stretch_size),
+					width: c_size, height: c_size,
+					offset_x: stretch_size - c_size, offset_y: stretch_size - c_size),
+				mask: img_partial_corner_mask),
+				offset_x: 0, offset_y: 0)
+
+		img := overlay(
+			image1: img,
+			image2: masked_blend(
+				light: corner_img_top_right,
+				dark: crop(
+					resize_image(corner_img_top_right, width: stretch_size, height: stretch_size),
+					width: c_size, height: c_size,
+					offset_x: 0, offset_y: stretch_size - c_size),
+				mask: rotate(img_partial_corner_mask, angle: -90)),
+				offset_x: right_offset, offset_y: 0)
+
+		img := overlay(
+			image1: img,
+			image2: masked_blend(
+				light: corner_img_bottom_left,
+				dark: crop(
+					resize_image(corner_img_bottom_left, width: stretch_size, height: stretch_size),
+					width: c_size, height: c_size,
+					offset_x: stretch_size - c_size, offset_y: 0),
+				mask: rotate(img_partial_corner_mask, angle: -270)),
+				offset_x: 0, offset_y: bottom_offset)
+
+		img := overlay(
+			image1: img,
+			image2: masked_blend(
+				light: corner_img_bottom_right,
+				dark: crop(
+					resize_image(corner_img_bottom_right, width: stretch_size, height: stretch_size),
+					width: c_size, height: c_size,
+					offset_x: 0, offset_y: 0),
+				mask: rotate(img_partial_corner_mask, angle: -180)),
+				offset_x: right_offset, offset_y: bottom_offset)
+
+		if layout == "meld" and side == "back" then (
+			img := overlay(
+				image1: input,
+				image2: masked_blend(
+					light: crop(input, width: px(8), height: px(20), offset_x: 0,     offset_y: px(252))
+					dark:  crop(input, width: px(8), height: px(20), offset_x: px(8), offset_y: px(252))
+					mask: img_partial_meld_center_mask),
+				offset_x: 0, offset_y: px(252))
+
+			img := overlay(
+				image1: input,
+				image2: masked_blend(
+					light: crop(input, width: px(8), height: px(20), offset_x: card_base_width - px(8),  offset_y: px(252))
+					dark:  crop(input, width: px(8), height: px(20), offset_x: card_base_width - px(16), offset_y: px(252))
+					mask: flip_horizontal(img_partial_meld_center_mask)),
+				offset_x: card_base_width - px(8), offset_y: px(252))
+		)
+
+		img
+	}
+
+	sharpen_corners := {
+		if is_fullart() then
+			fill_corners(input)
+		else
+			mask_corners(input)
+	}
+
+	add_bleeding := {
+		img := input
+
+		if not is_plane() then (
+			border_img_bleed :=
+				if is_old() then img_full_border_common_bleed else
+				if is_silver_border() then img_border_silver_bleed else
+				img_border_common_bleed
+			img := overlay(image1: recolor_image(border_img_bleed, color: card.border_color), image2: img, offset_x: max_bleed, offset_y: max_bleed)
+		) else (
+			img := overlay(image1: img_border_mini_plane_bleed, image2: img, offset_x: max_bleed, offset_y: max_bleed)
+		)
+
+		if is_fullart() then
+			img := fullart_bleed(img)
+
+		if layout == "meld" and side == "back" then
+			img := handle_bled_meld(img)
+
+		if options.add_cut_lines then
+			img := masked_blend(dark: img, light: img_cut_lines_bleed, mask: img_cut_lines_bleed)
+
+		if bleeding_amount != max_bleed then
+			img := crop(img, width: card_full_width, height: card_full_height, offset_x: max_bleed - bleeding_amount, offset_y: max_bleed - bleeding_amount)
+
+		img
+	}
+
+	write_card_image := {
+		img := to_image(card, zoom: zoom_lvl)
+
+		if layout_sides() == 2 then (
+			#split front/back
+			img :=
+				if side == "front" then
+					crop(img, width: card_base_width, height: card_base_height, offset_x: 0, offset_y: 0)
+				else
+					crop(img, width: card_base_width, height: card_base_height, offset_x: px(377), offset_y: 0)
+		)
+
+		if layout == "horizontal" then
+			img := rotate(img, angle: 90)
+
+		if should_sharpen then
+			img := sharpen_corners(img)
+
+		if should_bleed then (
+			img := add_bleeding(img)
+			# (add_bleeding does its own meld back splitting)
+		) else if layout == "meld" and side == "back" then (
+			img := resize_image(rotate(
+				if is_meld_melder_side() then
+					crop(img, width: card_base_width, height: px(261), offset_x: 0, offset_y: 0)
+				else
+					crop(img, width: card_base_width, height: px(260), offset_x: 0, offset_y: px(263)),
+				angle: 90),
+				width: card_base_width, height: card_base_height,
+				mode: "bicubic")
+		)
+
+		img
+	}
+
+	print_sheet := {
+		if not should_bleed and options.add_cut_lines then (
+			line_img := resize_image(img_cut_lines_dot, width: 1, height: full_print_area_height)
+			for line_idx from 1 to sheet_x_count-1 do (
+				current_sheet := overlay(image1: current_sheet, image2: line_img, offset_x: line_idx * card_full_width, offset_y: 0)
+				nil
+			)
+
+			line_img := resize_image(img_cut_lines_dot, width: full_print_area_width, height: 1)
+			for line_idx from 1 to sheet_y_count-1 do (
+				current_sheet := overlay(image1: current_sheet, image2: line_img, offset_x: 0, offset_y: line_idx * card_full_height)
+				nil
+			)
+		)
+
+		if horizontal_sheet then
+			current_sheet := rotate(current_sheet, angle: 270)
+
+		w := if horizontal_sheet then full_print_area_height else full_print_area_width
+		h := if horizontal_sheet then full_print_area_width else full_print_area_height
+
+		margin_x := margin_y := 0
+
+		if options.add_full_page_margin then (
+			margin_x := (full_page_width - w) / 2
+			margin_y := (full_page_height - h) / 2
+
+			current_sheet := overlay(
+				image1: resize_image(img_blank, width: full_page_width, height: full_page_height),
+				image2: current_sheet,
+				offset_x: margin_x, offset_y: margin_y)
+
+			w := full_page_width
+			h := full_page_height
+			
+			if not should_bleed and options.add_cut_lines then (
+				line_img := resize_image(img_cut_lines_dot, width: 1, height: full_print_area_height + 2)
+				current_sheet := overlay(image1: current_sheet, image2: line_img, offset_x: margin_x - 1, offset_y: margin_y - 1)
+				current_sheet := overlay(image1: current_sheet, image2: line_img, offset_x: full_page_width - margin_x, offset_y: margin_y - 1)
+				
+				line_img := resize_image(img_cut_lines_dot, width: full_print_area_width + 2, height: 1)
+				current_sheet := overlay(image1: current_sheet, image2: line_img, offset_x: margin_x - 1, offset_y: margin_y - 1)
+				current_sheet := overlay(image1: current_sheet, image2: line_img, offset_x: margin_x - 1, offset_y: full_page_height - margin_y)
+			)
+		)
+
+		write_image_file(
+			current_sheet,
+			file: "sheet_" + current_sheet_idx + ".png",
+			width: w, height: h)
+	}
+
+	print_image_single := {
+		path := (if layout_sides() == 2 then "_DFC" + (if options.dfc_front_and_back_in_separate_folders then " " + to_upper(side) else "") + "/" else "") + card_filename()
+		write_image_file(input, file: path, width: card_full_width, height: card_full_height)
+	}
+
+	# This is all can't be separated into many functions because current_sheet_idx, current_sheet and current_index_in_sheet need
+	# to be "global" variables, assignable when you start writing a new sheet
+
+	#############################
+	#   Setup Sheet Variables   #
+	#############################
+
+	# MtG card size: 63.5 x 88.9 mm
+	#    > 5.8943 px per mm
+	# With max bleed: +18 px on each side
+	#    > 66.65 x 91.95 mm
+
+	should_bleed := options.bleed_mode == "add bleed"
+	should_sharpen := options.bleed_mode != "raw"
+
+	card_mm_dimensions := format_dimensions("card")
+	px_per_mm := ((card_base_width / card_mm_dimensions[0]) + (card_base_height / card_mm_dimensions[1])) * 0.5
+
+	if options.format == "Individual Cards" then (
+		page_mm_dimensions := card_mm_dimensions
+		sheet_x_count := 1
+		sheet_y_count := 1
+		bleeding_amount := if should_bleed then px(18) else 0
+		horizontal_sheet := false
+	) else if options.format == "Card List Only" then (
+		sheet_x_count := 0
+		sheet_y_count := 0
+		bleeding_amount := 0
+	) else (
+		page_mm_dimensions := format_dimensions(options.format)
+
+		full_page_width := to_int(page_mm_dimensions[0] * px_per_mm)
+		full_page_height := to_int(page_mm_dimensions[1] * px_per_mm)
+
+		min_margin := to_int(7 * px_per_mm) * 2 #ensure a 7mm margin to be sage
+		min_bleed := if should_bleed then to_int(max_bleed / 2) else 0
+
+		#calculate vertical count
+		sheet_x_count := to_int((full_page_width - min_margin) / (card_base_width + min_bleed * 2))
+		sheet_y_count := to_int((full_page_height - min_margin) / (card_base_height + min_bleed * 2))
+		bleeding_amount :=
+			if should_bleed then
+				min(max_bleed, to_int(min(
+					(full_page_width - min_margin - sheet_x_count * card_base_width) / (sheet_x_count * 2),
+					(full_page_height - min_margin - sheet_y_count * card_base_height) / (sheet_y_count * 2)
+				)))
+			else 0
+
+		#calculate horizontal count
+		horizontal_sheet_x_count := to_int((full_page_height - min_margin) / (card_base_width + min_bleed * 2))
+		horizontal_sheet_y_count := to_int((full_page_width - min_margin) / (card_base_height + min_bleed * 2))
+		horizontal_bleeding_amount :=
+			if should_bleed then
+				min(max_bleed, to_int(min(
+					(full_page_height - min_margin - horizontal_sheet_x_count * card_base_width) / (horizontal_sheet_x_count * 2),
+					(full_page_width - min_margin - horizontal_sheet_y_count * card_base_height) / (horizontal_sheet_y_count * 2)
+				)))
+			else 0
+
+		#use best result
+		horizontal_sheet :=
+			horizontal_sheet_x_count * horizontal_sheet_y_count > sheet_x_count * sheet_y_count or
+			(horizontal_sheet_x_count * horizontal_sheet_y_count == sheet_x_count * sheet_y_count and
+			 horizontal_bleeding_amount > bleeding_amount)
+
+		if horizontal_sheet then (
+			sheet_x_count := horizontal_sheet_x_count
+			sheet_y_count := horizontal_sheet_y_count
+			bleeding_amount := horizontal_bleeding_amount
+		)
+	)
+
+	card_full_width  := card_base_width + bleeding_amount * 2
+	card_full_height := card_base_height + bleeding_amount * 2
+	
+	full_print_area_width := card_full_width * sheet_x_count
+	full_print_area_height := card_full_height * sheet_y_count
+
+	#############################
+	#     Write Card Sheets     #
+	#############################
+
+	current_sheet_idx := 1
+	current_sheet := nil
+	current_index_in_sheet := -1
+
+	card_list := ""
+	set_contains_oversize := false
+
+	for each card_index:card in cards do if should_print_card() then (
+		layout := compute_card_layout()
+		print_count := card_print_count()
+
+		if print_count > 0 then (
+			if contains(layout, match: "oversize") then (
+				set_contains_oversize := true
+			) else (
+				card_list := card_list +
+					"\n" + (if print_count > 1 then print_count + "x " else "") + card_name()
+
+				if options.format != "Card List Only" then (
+					for each side in (if layout_sides() == 1 then ["front"] else ["front", "back"]) do (
+						#############################
+						#     Write Card Image     #
+						#############################
+						card_image := write_card_image()
+
+						for print_idx from 0 to print_count - 1 do (
+							if options.format == "Individual Cards" then (
+								print_image_single(card_image)
+							) else (
+								#############################
+								#    Add Image to Sheet     #
+								#############################
+
+								if current_index_in_sheet < 0 then (
+									current_sheet := resize_image(img_blank,
+										width: full_print_area_width,
+										height: full_print_area_height)
+									current_index_in_sheet := 0
+								)
+
+								current_sheet := overlay(image1: current_sheet, image2: card_image,
+									offset_x: card_full_width * (current_index_in_sheet mod sheet_x_count),
+									offset_y: card_full_height * (current_index_in_sheet div sheet_x_count))
+
+								current_index_in_sheet := current_index_in_sheet + 1
+								if current_index_in_sheet >= sheet_x_count * sheet_y_count then (
+									# Print sheet
+									print_sheet()
+
+									current_sheet := nil
+									current_index_in_sheet := -1
+									current_sheet_idx := current_sheet_idx + 1
+								)
+							)
+						)
+					)
+				)
+			)
+		)
+	)
+
+	# Print the last sheet
+	if current_index_in_sheet >= 0 then (
+		print_sheet()
+	)
+
+	export_end_time := to_date("now")
+
+	if set_contains_oversize then (
+		trace("Warning: Oversize cards are currently not handled.")
+	)
+
+	#############################
+	#     Write Output File     #
+	#############################
+
+	(if options.format != "Card List Only" then
+		"- Export:"
+
+		+ "\nFormat: " + options.format + " (" + page_mm_dimensions[0] + "mm x " + page_mm_dimensions[1] + "mm)"
+		
+		+ "\nZoom Level: " + options.zoom_level
+
+		+ (if should_bleed then
+			"\nBleed Size: " + bleeding_amount + "px (" + to_string(bleeding_amount / px_per_mm, format: ".1f") + "mm)"
+		else "")
+
+		+ (if horizontal_sheet then
+			"\nPrint Area: " + full_print_area_height + "px x " + full_print_area_width + "px"
+			+ " (" + to_int(full_print_area_height / px_per_mm) + "mm x " + to_int(full_print_area_width / px_per_mm) + "mm)"
+		else
+			"\nPrint Area: " + full_print_area_width + "px x " + full_print_area_height + "px"
+			+ " (" + to_int(full_print_area_width / px_per_mm) + "mm x " + to_int(full_print_area_height / px_per_mm) + "mm)")
+
+		+ (if print_group == "(default)" then "" else "\n\nPrint Group: " + print_group)
+	
+		+ "\n\n"
+	else "")
+
+	+ (if options.format == "Individual Cards" and not should_bleed then
+		"Warning: You are printing individual cards without bleed. If you want to print your cards on MakePlayingCards.com, enable bleed.\n\n"
+	else "")
+
+	+ (if set_contains_oversize then
+		"Warning: Oversize cards are currently not handled and have been skipped.\n\n"
+	else "")
+	
+	+ "- Export Time:"
+	+ "\nFrom " + filter_text(export_begin_time, match: "..:..:..$")
+	+ " to " + filter_text(export_end_time, match: "..:..:..$")
+	+ "\nDuration: " + get_duration(start: export_begin_time, end: export_end_time)
+
+	+ "\n\n- Card List" + (
+		if card_list == "" then
+			":\n (none)"
+		else if print_group == "(default)" then
+			":" + card_list
+		else
+			" (" + print_group + "):" + card_list
+	)
