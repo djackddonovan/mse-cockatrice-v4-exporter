@@ -122,4 +122,9 @@ Check your syntax, it’s very specific. Look at the example in the related sect
 Double check to make sure they installed them correctly. Also check to see if all the image file names weren’t changed in the download process. Google Drive is known to modify punctuation improperly if you rely on its inbuilt zipping functionality for downloads. If that seems to be an issue, zip up your files before uploading to Google Drive.
 
 <!-- CHANGELOGS -->
-## Changelogs TODO
+## Changelogs
+
+| Version         | Description                                            |
+|-----------------|--------------------------------------------------------|
+| 2023-01-20      | Added the new Print Sheet Exporter                     |
+| 2022-10-07      | Initial version                                        |
